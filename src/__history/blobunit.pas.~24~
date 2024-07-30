@@ -1,0 +1,207 @@
+unit blobunit;
+
+interface
+
+uses
+  System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
+  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
+  FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
+  FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
+  FireDAC.Phys, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef,
+  FireDAC.Stan.ExprFuncs, FireDAC.Phys.SQLiteWrapper.Stat, FireDAC.FMXUI.Wait,
+  FireDAC.Stan.Param, FireDAC.DatS, FireDAC.DApt.Intf, FireDAC.DApt,
+  FMX.Controls.Presentation, FMX.StdCtrls, Data.DB, FireDAC.Comp.DataSet,
+  FireDAC.Comp.Client, System.Rtti, FMX.Grid.Style, FMX.ScrollBox, FMX.Grid;
+
+type
+  TForm1 = class(TForm)
+    FDConnection1: TFDConnection;
+    FDQuery1: TFDQuery;
+    Button1: TButton;
+    OpenDialog1: TOpenDialog;
+    StringGrid1: TStringGrid;
+    StringColumn1: TStringColumn;
+    StringColumn2: TStringColumn;
+    StringColumn3: TStringColumn;
+    Button2: TButton;
+    Button3: TButton;
+    procedure InsertFileToDatabase(const FileName: string);
+    procedure Button1Click(Sender: TObject);
+    procedure ReadFileFromDatabase(const ID: Integer; const OutputFileName: string);
+    procedure UpdateFileInDatabase(const ID: Integer; const NewFileName: string);
+    procedure DeleteFileFromDatabase(const ID: Integer);
+    procedure FormCreate(Sender: TObject);
+    procedure RefreshGrid;
+    procedure Button2Click(Sender: TObject);
+    procedure Button3Click(Sender: TObject);
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.fmx}
+
+procedure TForm1.Button1Click(Sender: TObject);
+begin
+if OpenDialog1.Execute then
+begin
+InsertFileToDatabase(OpenDialog1.FileName);
+end;
+end;
+
+procedure TForm1.Button2Click(Sender: TObject);
+var
+  SelectedRow: Integer;
+  ID: Integer;
+begin
+  SelectedRow := StringGrid1.Row;
+
+  if SelectedRow > 0 then
+  begin
+    ID := StrToInt(StringGrid1.Cells[0, SelectedRow]);
+
+    FDConnection1.Connected := True;
+    FDQuery1.SQL.Text := 'DELETE FROM Files WHERE ID = :ID';
+    FDQuery1.Params.ParamByName('ID').AsInteger := ID;
+    FDQuery1.ExecSQL;
+    FDConnection1.Connected := False;
+    RefreshGrid;
+  end;
+end;
+procedure TForm1.Button3Click(Sender: TObject);
+var
+  FileStream: TFileStream;
+  SelectedRow: Integer;
+  ID: Integer;
+begin
+  SelectedRow := StringGrid1.Row;
+
+  if (SelectedRow > 0) and OpenDialog1.Execute then
+  begin
+    ID := StrToInt(StringGrid1.Cells[0, SelectedRow]);
+
+    FDConnection1.Connected := True;
+    FileStream := TFileStream.Create(OpenDialog1.FileName, fmOpenRead or fmShareDenyWrite);
+    try
+      FDQuery1.SQL.Text := 'UPDATE Files SET FileName = :FileName, FileData = :FileData WHERE ID = :ID';
+      FDQuery1.Params.ParamByName('FileName').AsString := ExtractFileName(OpenDialog1.FileName);
+      FDQuery1.Params.ParamByName('FileData').LoadFromStream(FileStream, ftBlob);
+      FDQuery1.Params.ParamByName('ID').AsInteger := ID;
+      FDQuery1.ExecSQL;
+    finally
+      FileStream.Free;
+    end;
+    FDConnection1.Connected := False;
+    RefreshGrid;
+  end;
+end;
+procedure TForm1.DeleteFileFromDatabase(const ID: Integer);
+begin
+  FDConnection1.Connected := True;
+  FDQuery1.SQL.Text := 'DELETE FROM Files WHERE ID = :ID';
+  FDQuery1.Params.ParamByName('ID').AsInteger := ID;
+  FDQuery1.ExecSQL;
+  FDConnection1.Connected := False;
+end;
+
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+StringGrid1.Cells[0,0] := 'ID';
+StringGrid1.Cells[1,0] := 'FileName';
+StringGrid1.Cells[2,0] := 'Actions';
+
+RefreshGrid;
+end;
+
+procedure TForm1.InsertFileToDatabase(const FileName: string);
+var FileStream: TFileStream;
+begin
+ FDConnection1.Connected := True;
+ FileStream := TFileStream.Create(FileName, fmOpenRead or fmShareDenyWrite);
+ try
+   FDQuery1.SQL.Text := 'INSERT INTO Files (FileName,FileData) VALUES (:FileName, :FileData)';
+   FDQuery1.Params.ParamByName('FileName').AsString := ExtractFileName(FileName);
+   FDQuery1.Params.ParamByName('FileData').LoadFromStream(FileStream, ftBlob);
+   FDQuery1.ExecSQL;
+ finally
+   FileStream.Free;
+   FDConnection1.Connected := False;
+ end;
+end;
+
+procedure TForm1.ReadFileFromDatabase(const ID: Integer;
+  const OutputFileName: string);
+var
+  FileStream: TFileStream;
+begin
+  FDConnection1.Connected := True;
+  FDQuery1.SQL.Text := 'SELECT FileData FROM Files WHERE ID = :ID';
+  FDQuery1.Params.ParamByName('ID').AsInteger := ID;
+  FDQuery1.Open;
+
+  if not FDQuery1.Eof then
+  begin
+    FileStream := TFileStream.Create(OutputFileName, fmCreate);
+    try
+      TBlobField(FDQuery1.FieldByName('FileData')).SaveToStream(FileStream);
+    finally
+      FileStream.Free;
+    end;
+  end;
+
+  FDQuery1.Close;
+  FDConnection1.Connected := False;
+end;
+
+procedure TForm1.RefreshGrid;
+var
+  RowIndex: integer;
+begin
+  FDQuery1.SQL.Text := 'SELECT ID, FileName FROM Files';
+  FDQuery1.Open;
+
+  StringGrid1.RowCount := 1;
+
+  RowIndex := 1;
+
+  while not FDQuery1.Eof do
+  begin
+    StringGrid1.RowCount := RowIndex +1;
+
+    StringGrid1.Cells[0,RowIndex] := FDQuery1.FieldByName('ID').AsString;
+    StringGrid1.Cells[1,RowIndex] := FDQuery1.FieldByName('FileName').AsString;
+    StringGrid1.Cells[2,RowIndex] := 'Download';
+
+    Inc(RowIndex);
+    FDQuery1.Next;
+  end;
+
+  FDQuery1.Close;
+end;
+
+procedure TForm1.UpdateFileInDatabase(const ID: Integer;
+  const NewFileName: string);
+var
+  FileStream: TFileStream;
+begin
+  FDConnection1.Connected := True;
+  FileStream := TFileStream.Create(NewFileName, fmOpenRead or fmShareDenyWrite);
+  try
+    FDQuery1.SQL.Text := 'UPDATE Files SET FileName = :FileName, FileData = :FileData WHERE ID = :ID';
+    FDQuery1.Params.ParamByName('FileName').AsString := ExtractFileName(NewFileName);
+    FDQuery1.Params.ParamByName('FileData').LoadFromStream(FileStream, ftBlob);
+    FDQuery1.Params.ParamByName('ID').AsInteger := ID;
+    FDQuery1.ExecSQL;
+  finally
+    FileStream.Free;
+    FDConnection1.Connected := False;
+  end;
+end;
+
+end.
